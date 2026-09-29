@@ -91,7 +91,8 @@ const NOMINATIM = "https://nominatim.openstreetmap.org";
 const TASHKENT = [41.3111, 69.2797];
 const VIEWBOX = "69.05,41.45,69.50,41.15";
 
-const tg = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData ? window.Telegram.WebApp : null;
+const webApp = window.Telegram && window.Telegram.WebApp;
+const tg = webApp && webApp.platform && webApp.platform !== "unknown" ? webApp : null;
 const params = new URLSearchParams(location.search);
 const lang = params.get("lang") === "ru" ? "ru" : "uz";
 const mode = params.get("mode") === "to" ? "to" : "from";
