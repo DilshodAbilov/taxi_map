@@ -77,18 +77,26 @@ const TEXT = {
     from: "Qayerdan?", to: "Qayerga?", placeholder: "Manzil: Amir Temur 108",
     find: "Qidirish", none: "Hech narsa topilmadi", confirm: "Tasdiqlash",
     locating: "Manzil aniqlanmoqda…", unknown: "Xaritadagi nuqta",
-    geo_denied: "Joylashuvni aniqlab bo'lmadi", outside: "Sahifani Telegram ichida oching"
+    geo_denied: "Joylashuvni aniqlab bo'lmadi", outside: "Sahifani Telegram ichida oching",
+    finding_me: "Joylashuvingiz aniqlanmoqda…", pick_hint: "Xaritada nuqtani tanlang yoki manzilni qidiring",
+    zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring"
   },
   ru: {
     from: "Откуда?", to: "Куда?", placeholder: "Адрес: Амира Темура 108",
     find: "Найти", none: "Ничего не найдено", confirm: "Подтвердить",
     locating: "Определяем адрес…", unknown: "Точка на карте",
-    geo_denied: "Не удалось определить геопозицию", outside: "Откройте страницу внутри Telegram"
+    geo_denied: "Не удалось определить геопозицию", outside: "Откройте страницу внутри Telegram",
+    finding_me: "Определяем ваше местоположение…", pick_hint: "Выберите точку на карте или найдите адрес",
+    zoom_in: "Приблизьте карту, чтобы выбрать точное место"
   }
 };
 
 const NOMINATIM = "https://nominatim.openstreetmap.org";
 const TASHKENT = [41.3111, 69.2797];
+const CITY_ZOOM = 12;
+const STREET_ZOOM = 17;
+const MIN_POINT_ZOOM = 15;
+let locating = false;
 const VIEWBOX = "69.05,41.45,69.50,41.15";
 
 const webApp = window.Telegram && window.Telegram.WebApp;
@@ -111,9 +119,10 @@ function number(name) {
 }
 
 const startLat = number("lat"), startLon = number("lon");
-const start = startLat !== null && startLon !== null ? [startLat, startLon] : TASHKENT;
+const hasStart = startLat !== null && startLon !== null;
 
-const map = L.map("map", { zoomControl: false, attributionControl: true }).setView(start, 16);
+const map = L.map("map", { zoomControl: false, attributionControl: true })
+  .setView(hasStart ? [startLat, startLon] : TASHKENT, hasStart ? 16 : CITY_ZOOM);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: "© OpenStreetMap"
@@ -148,6 +157,10 @@ async function nominatim(path, query) {
 let reverseToken = 0;
 async function updateAddress() {
   const token = ++reverseToken;
+  if (map.getZoom() < MIN_POINT_ZOOM) {
+    $("address").textContent = locating ? T.finding_me : T.zoom_in;
+    return;
+  }
   const c = map.getCenter();
   $("address").textContent = T.locating;
   try {
@@ -201,16 +214,45 @@ $("form").addEventListener("submit", async (event) => {
   }
 });
 
-$("mine").addEventListener("click", () => {
-  if (!navigator.geolocation) return;
+function browserLocation(done) {
+  if (!navigator.geolocation) return done(null);
   navigator.geolocation.getCurrentPosition(
-    (p) => map.setView([p.coords.latitude, p.coords.longitude], 17),
-    () => tg ? tg.showAlert(T.geo_denied) : alert(T.geo_denied),
-    { enableHighAccuracy: true, timeout: 10000 }
+    (p) => done([p.coords.latitude, p.coords.longitude]),
+    () => done(null),
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
   );
-});
+}
+
+function currentLocation(done) {
+  const manager = tg && tg.LocationManager;
+  if (!manager || typeof manager.init !== "function") return browserLocation(done);
+  manager.init(() => {
+    if (!manager.isLocationAvailable) return browserLocation(done);
+    manager.getLocation((data) => data ? done([data.latitude, data.longitude]) : browserLocation(done));
+  });
+}
+
+function locateMe(silent) {
+  locating = true;
+  if (map.getZoom() < MIN_POINT_ZOOM) $("address").textContent = T.finding_me;
+  currentLocation((point) => {
+    locating = false;
+    if (point) {
+      map.setView(point, STREET_ZOOM);
+      return;
+    }
+    if (map.getZoom() < MIN_POINT_ZOOM) $("address").textContent = T.pick_hint;
+    if (!silent) tg ? tg.showAlert(T.geo_denied) : alert(T.geo_denied);
+  });
+}
+
+$("mine").addEventListener("click", () => locateMe(false));
 
 function confirmPoint() {
+  if (map.getZoom() < MIN_POINT_ZOOM) {
+    tg ? tg.showAlert(T.zoom_in) : alert(T.zoom_in);
+    return;
+  }
   const c = map.getCenter();
   const payload = JSON.stringify({ lat: +c.lat.toFixed(6), lon: +c.lng.toFixed(6) });
   if (tg) {
@@ -231,7 +273,11 @@ if (tg) {
   $("confirm").addEventListener("click", confirmPoint);
 }
 
-updateAddress();
+if (hasStart) {
+  updateAddress();
+} else {
+  locateMe(true);
+}
 </script>
 </body>
 </html>
