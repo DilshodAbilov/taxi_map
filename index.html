@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>TezGo — xarita</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1c1c1e);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --card: var(--tg-theme-secondary-bg-color, #f2f2f7);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .top { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 1000; }
+  .search { display: flex; gap: 8px; }
+  .search input { flex: 1; min-width: 0; padding: 12px 14px; border: 0; border-radius: 12px;
+    background: var(--bg); color: var(--text); font-size: 16px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+  .search button { padding: 0 16px; border: 0; border-radius: 12px; background: var(--accent);
+    color: var(--accent-text); font-size: 15px; font-weight: 600; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+  .results { margin-top: 8px; background: var(--bg); border-radius: 12px; overflow: hidden;
+    box-shadow: 0 2px 10px rgba(0,0,0,.15); display: none; max-height: 45vh; overflow-y: auto; }
+  .results div { padding: 12px 14px; border-bottom: 1px solid var(--card); cursor: pointer; }
+  .results div:last-child { border-bottom: 0; }
+  .results .empty { color: var(--hint); cursor: default; }
+  .pin { position: absolute; left: 50%; top: 50%; z-index: 999; pointer-events: none;
+    transform: translate(-50%, -100%); font-size: 40px; line-height: 1; transition: transform .15s; }
+  .pin.lifted { transform: translate(-50%, -125%); }
+  .shadow { position: absolute; left: 50%; top: 50%; z-index: 998; width: 10px; height: 4px;
+    margin: -2px 0 0 -5px; border-radius: 50%; background: rgba(0,0,0,.35); pointer-events: none; }
+  .bottom { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 1000; }
+  .card { background: var(--bg); border-radius: 14px; padding: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.18); }
+  .title { color: var(--hint); font-size: 13px; margin-bottom: 4px; }
+  .address { font-weight: 600; min-height: 20px; }
+  .mine { position: absolute; right: 12px; bottom: 110px; z-index: 1000; width: 48px; height: 48px;
+    border: 0; border-radius: 50%; background: var(--bg); color: var(--text); font-size: 22px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.2); }
+  .confirm { display: none; width: 100%; margin-top: 10px; padding: 14px; border: 0; border-radius: 12px;
+    background: var(--accent); color: var(--accent-text); font-size: 16px; font-weight: 600; }
+  .leaflet-control-attribution { font-size: 10px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="shadow"></div>
+<div class="pin" id="pin">📍</div>
+
+<div class="top">
+  <form class="search" id="form">
+    <input id="query" type="search" autocomplete="off" enterkeyhint="search">
+    <button type="submit" id="find"></button>
+  </form>
+  <div class="results" id="results"></div>
+</div>
+
+<button class="mine" id="mine" type="button">◎</button>
+
+<div class="bottom">
+  <div class="card">
+    <div class="title" id="title"></div>
+    <div class="address" id="address"></div>
+    <button class="confirm" id="confirm" type="button"></button>
+  </div>
+</div>
+
+<script>
+const TEXT = {
+  uz: {
+    from: "Qayerdan?", to: "Qayerga?", placeholder: "Manzil: Amir Temur 108",
+    find: "Qidirish", none: "Hech narsa topilmadi", confirm: "Tasdiqlash",
+    locating: "Manzil aniqlanmoqda…", unknown: "Xaritadagi nuqta",
+    geo_denied: "Joylashuvni aniqlab bo'lmadi", outside: "Sahifani Telegram ichida oching"
+  },
+  ru: {
+    from: "Откуда?", to: "Куда?", placeholder: "Адрес: Амира Темура 108",
+    find: "Найти", none: "Ничего не найдено", confirm: "Подтвердить",
+    locating: "Определяем адрес…", unknown: "Точка на карте",
+    geo_denied: "Не удалось определить геопозицию", outside: "Откройте страницу внутри Telegram"
+  }
+};
+
+const NOMINATIM = "https://nominatim.openstreetmap.org";
+const TASHKENT = [41.3111, 69.2797];
+const VIEWBOX = "69.05,41.45,69.50,41.15";
+
+const tg = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData ? window.Telegram.WebApp : null;
+const params = new URLSearchParams(location.search);
+const lang = params.get("lang") === "ru" ? "ru" : "uz";
+const mode = params.get("mode") === "to" ? "to" : "from";
+const T = TEXT[lang];
+const $ = (id) => document.getElementById(id);
+
+document.documentElement.lang = lang;
+$("title").textContent = T[mode];
+$("query").placeholder = T.placeholder;
+$("find").textContent = T.find;
+$("confirm").textContent = T.confirm;
+
+function number(name) {
+  const value = parseFloat(params.get(name));
+  return Number.isFinite(value) ? value : null;
+}
+
+const startLat = number("lat"), startLon = number("lon");
+const start = startLat !== null && startLon !== null ? [startLat, startLon] : TASHKENT;
+
+const map = L.map("map", { zoomControl: false, attributionControl: true }).setView(start, 16);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: "© OpenStreetMap"
+}).addTo(map);
+
+const aLat = number("alat"), aLon = number("alon");
+if (mode === "to" && aLat !== null && aLon !== null) {
+  L.circleMarker([aLat, aLon], { radius: 8, color: "#ffffff", weight: 3, fillColor: "#2e7d32", fillOpacity: 1 }).addTo(map);
+}
+
+function formatAddress(a) {
+  const area = a.suburb || a.city_district || a.neighbourhood || a.quarter || a.residential;
+  let street = a.road || a.pedestrian || a.footway;
+  if (street && a.house_number) street += " " + a.house_number;
+  const place = a.amenity || a.shop || a.building;
+  let parts = [area, street || place].filter(Boolean);
+  if (!parts.length) parts = [a.city || a.town || a.village].filter(Boolean);
+  return [...new Set(parts)].join(", ");
+}
+
+let lastRequest = 0;
+async function nominatim(path, query) {
+  const wait = 1100 - (Date.now() - lastRequest);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastRequest = Date.now();
+  const url = `${NOMINATIM}/${path}?${new URLSearchParams({ format: "jsonv2", "accept-language": lang, ...query })}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(response.status);
+  return response.json();
+}
+
+let reverseToken = 0;
+async function updateAddress() {
+  const token = ++reverseToken;
+  const c = map.getCenter();
+  $("address").textContent = T.locating;
+  try {
+    const data = await nominatim("reverse", { lat: c.lat, lon: c.lng, zoom: 18, addressdetails: 1 });
+    if (token === reverseToken) $("address").textContent = formatAddress(data.address || {}) || T.unknown;
+  } catch (e) {
+    if (token === reverseToken) $("address").textContent = T.unknown;
+  }
+}
+
+let moveTimer = null;
+map.on("movestart", () => {
+  $("pin").classList.add("lifted");
+  $("results").style.display = "none";
+});
+map.on("moveend", () => {
+  $("pin").classList.remove("lifted");
+  clearTimeout(moveTimer);
+  moveTimer = setTimeout(updateAddress, 500);
+});
+
+$("form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const q = $("query").value.trim();
+  if (!q) return;
+  $("query").blur();
+  const box = $("results");
+  box.innerHTML = "";
+  box.style.display = "block";
+  let items = [];
+  try {
+    items = await nominatim("search", { q, countrycodes: "uz", viewbox: VIEWBOX, bounded: 1, limit: 5, addressdetails: 1 });
+  } catch (e) {
+    items = [];
+  }
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = T.none;
+    box.appendChild(empty);
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.textContent = formatAddress(item.address || {}) || item.display_name;
+    row.addEventListener("click", () => {
+      box.style.display = "none";
+      map.setView([parseFloat(item.lat), parseFloat(item.lon)], 17);
+    });
+    box.appendChild(row);
+  }
+});
+
+$("mine").addEventListener("click", () => {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    (p) => map.setView([p.coords.latitude, p.coords.longitude], 17),
+    () => tg ? tg.showAlert(T.geo_denied) : alert(T.geo_denied),
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+});
+
+function confirmPoint() {
+  const c = map.getCenter();
+  const payload = JSON.stringify({ lat: +c.lat.toFixed(6), lon: +c.lng.toFixed(6) });
+  if (tg) {
+    tg.sendData(payload);
+  } else {
+    alert(T.outside);
+  }
+}
+
+if (tg) {
+  tg.ready();
+  tg.expand();
+  tg.MainButton.setText(T.confirm);
+  tg.MainButton.onClick(confirmPoint);
+  tg.MainButton.show();
+} else {
+  $("confirm").style.display = "block";
+  $("confirm").addEventListener("click", confirmPoint);
+}
+
+updateAddress();
+</script>
+</body>
+</html>
