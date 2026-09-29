@@ -40,9 +40,17 @@
   .card { background: var(--bg); border-radius: 14px; padding: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.18); }
   .title { color: var(--hint); font-size: 13px; margin-bottom: 4px; }
   .address { font-weight: 600; min-height: 20px; }
-  .mine { position: absolute; right: 12px; bottom: 110px; z-index: 1000; width: 48px; height: 48px;
-    border: 0; border-radius: 50%; background: var(--bg); color: var(--text); font-size: 22px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.2); }
+  .mine { position: absolute; right: 12px; bottom: 110px; z-index: 1000; width: 52px; height: 52px;
+    display: flex; align-items: center; justify-content: center; padding: 0;
+    border: 0; border-radius: 50%; background: var(--bg); color: var(--accent);
+    box-shadow: 0 2px 10px rgba(0,0,0,.25); cursor: pointer; }
+  .mine svg { width: 26px; height: 26px; }
+  .mine .arrow { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+  .mine.active .arrow { fill: currentColor; }
+  .mine.busy svg { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .me { width: 18px; height: 18px; border-radius: 50%; background: #1a73e8; border: 3px solid #fff;
+    box-shadow: 0 0 0 6px rgba(26,115,232,.25), 0 1px 4px rgba(0,0,0,.3); }
   .confirm { display: none; width: 100%; margin-top: 10px; padding: 14px; border: 0; border-radius: 12px;
     background: var(--accent); color: var(--accent-text); font-size: 16px; font-weight: 600; }
   .leaflet-control-attribution { font-size: 10px; }
@@ -61,7 +69,9 @@
   <div class="results" id="results"></div>
 </div>
 
-<button class="mine" id="mine" type="button">◎</button>
+<button class="mine" id="mine" type="button">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path class="arrow" d="M20.5 3.5 3.5 10.6l7 2.9 2.9 7 7.1-17z"/></svg>
+</button>
 
 <div class="bottom">
   <div class="card">
@@ -78,6 +88,7 @@ const TEXT = {
     find: "Qidirish", none: "Hech narsa topilmadi", confirm: "Tasdiqlash",
     locating: "Manzil aniqlanmoqda…", unknown: "Xaritadagi nuqta",
     geo_denied: "Joylashuvni aniqlab bo'lmadi", outside: "Sahifani Telegram ichida oching",
+    my_location: "Mening joylashuvim",
     finding_me: "Joylashuvingiz aniqlanmoqda…", pick_hint: "Xaritada nuqtani tanlang yoki manzilni qidiring",
     zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring"
   },
@@ -86,6 +97,7 @@ const TEXT = {
     find: "Найти", none: "Ничего не найдено", confirm: "Подтвердить",
     locating: "Определяем адрес…", unknown: "Точка на карте",
     geo_denied: "Не удалось определить геопозицию", outside: "Откройте страницу внутри Telegram",
+    my_location: "Моё местоположение",
     finding_me: "Определяем ваше местоположение…", pick_hint: "Выберите точку на карте или найдите адрес",
     zoom_in: "Приблизьте карту, чтобы выбрать точное место"
   }
@@ -111,6 +123,8 @@ document.documentElement.lang = lang;
 $("title").textContent = T[mode];
 $("query").placeholder = T.placeholder;
 $("find").textContent = T.find;
+$("mine").setAttribute("aria-label", T.my_location);
+$("mine").title = T.my_location;
 $("confirm").textContent = T.confirm;
 
 function number(name) {
@@ -172,6 +186,12 @@ async function updateAddress() {
 }
 
 let moveTimer = null;
+map.on("dragstart zoomstart", () => {
+  if (atMe && !locating) {
+    atMe = false;
+    $("mine").classList.remove("active");
+  }
+});
 map.on("movestart", () => {
   $("pin").classList.add("lifted");
   $("results").style.display = "none";
@@ -232,13 +252,27 @@ function currentLocation(done) {
   });
 }
 
+let meMarker = null;
+let atMe = false;
+
+function showMe(point) {
+  const icon = L.divIcon({ className: "", html: '<div class="me"></div>', iconSize: [24, 24], iconAnchor: [12, 12] });
+  if (meMarker) meMarker.setLatLng(point);
+  else meMarker = L.marker(point, { icon, interactive: false, keyboard: false }).addTo(map);
+}
+
 function locateMe(silent) {
   locating = true;
+  $("mine").classList.add("busy");
   if (map.getZoom() < MIN_POINT_ZOOM) $("address").textContent = T.finding_me;
   currentLocation((point) => {
     locating = false;
+    $("mine").classList.remove("busy");
     if (point) {
+      showMe(point);
       map.setView(point, STREET_ZOOM);
+      atMe = true;
+      $("mine").classList.add("active");
       return;
     }
     if (map.getZoom() < MIN_POINT_ZOOM) $("address").textContent = T.pick_hint;
