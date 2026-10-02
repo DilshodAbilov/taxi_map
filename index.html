@@ -28,9 +28,17 @@
     color: var(--accent-text); font-size: 15px; font-weight: 600; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
   .results { margin-top: 8px; background: var(--bg); border-radius: 12px; overflow: hidden;
     box-shadow: 0 2px 10px rgba(0,0,0,.15); display: none; max-height: 45vh; overflow-y: auto; }
-  .results div { padding: 12px 14px; border-bottom: 1px solid var(--card); cursor: pointer; }
-  .results div:last-child { border-bottom: 0; }
-  .results .empty { color: var(--hint); cursor: default; }
+  .results .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+    border-bottom: 1px solid var(--card); cursor: pointer; }
+  .results .row:last-child { border-bottom: 0; }
+  .results .row:active { background: var(--card); }
+  .results .icon { flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--card);
+    display: flex; align-items: center; justify-content: center; font-size: 17px; }
+  .results .text { min-width: 0; }
+  .results .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .results .sub { color: var(--hint); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .results .head { padding: 8px 14px 4px; color: var(--hint); font-size: 12px; text-transform: uppercase; }
+  .results .empty { padding: 12px 14px; color: var(--hint); }
   .pin { position: absolute; left: 50%; top: 50%; z-index: 5; pointer-events: none;
     transform: translate(-50%, -100%); font-size: 40px; line-height: 1; transition: transform .15s; }
   .pin.lifted { transform: translate(-50%, -125%); }
@@ -110,7 +118,7 @@ const TEXT = {
     geo_denied: "Joylashuvni aniqlab bo'lmadi", outside: "Sahifani Telegram ichida oching",
     my_location: "Mening joylashuvim", zoom_in_btn: "Yaqinlashtirish", zoom_out_btn: "Uzoqlashtirish",
     finding_me: "Joylashuvingiz aniqlanmoqda…", pick_hint: "Xaritada nuqtani tanlang yoki manzilni qidiring",
-    zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring"
+    zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring", recent: "Oldingi manzillar"
   },
   ru: {
     from: "Откуда?", to: "Куда?", placeholder: "Адрес: Амира Темура 108",
@@ -119,7 +127,7 @@ const TEXT = {
     geo_denied: "Не удалось определить геопозицию", outside: "Откройте страницу внутри Telegram",
     my_location: "Моё местоположение", zoom_in_btn: "Приблизить", zoom_out_btn: "Отдалить",
     finding_me: "Определяем ваше местоположение…", pick_hint: "Выберите точку на карте или найдите адрес",
-    zoom_in: "Приблизьте карту, чтобы выбрать точное место"
+    zoom_in: "Приблизьте карту, чтобы выбрать точное место", recent: "Недавние адреса"
   }
 };
 
@@ -129,7 +137,8 @@ const TASHKENT = [69.2797, 41.3111];
 const CITY_ZOOM = 11;
 const STREET_ZOOM = 16.5;
 const MIN_POINT_ZOOM = 14.5;
-const VIEWBOX = "69.05,41.45,69.50,41.15";
+const PHOTON = "https://photon.komoot.io";
+const BBOX = "69.0,41.09,69.56,41.53";
 let locating = false;
 
 const webApp = window.Telegram && window.Telegram.WebApp;
@@ -214,13 +223,6 @@ function formatAddress(a) {
   return [...new Set(parts)].join(", ");
 }
 
-function searchLabel(item) {
-  const name = (item.name || "").trim();
-  const address = formatAddress(item.address || {});
-  if (name && !address.includes(name)) return address ? `${name}, ${address}` : name;
-  return address || item.display_name;
-}
-
 let lastRequest = 0;
 async function nominatim(path, query) {
   const wait = 1100 - (Date.now() - lastRequest);
@@ -254,7 +256,7 @@ map.on("dragstart", leaveMe);
 map.on("zoomstart", (e) => { if (e.originalEvent) leaveMe(); });
 map.on("movestart", () => {
   $("pin").classList.add("lifted");
-  $("results").style.display = "none";
+  hideResults();
 });
 map.on("moveend", () => {
   $("pin").classList.remove("lifted");
@@ -269,40 +271,160 @@ function leaveMe() {
   }
 }
 
-$("form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const q = $("query").value.trim();
-  if (!q) return;
-  $("query").blur();
+const RECENT = (() => {
+  try {
+    const raw = new URLSearchParams(location.hash.slice(1)).get("r");
+    const items = raw ? JSON.parse(raw) : [];
+    return Array.isArray(items) ? items.filter((i) => Array.isArray(i) && i.length === 3).slice(0, 6) : [];
+  } catch (e) {
+    return [];
+  }
+})();
+
+const ICONS = [
+  [["railway", "station"], "🚇"], [["railway", "subway_entrance"], "🚇"], [["railway", "stop"], "🚇"],
+  [["railway", "halt"], "🚆"], [["highway", "bus_stop"], "🚌"], [["aeroway"], "✈️"],
+  [["amenity", "restaurant"], "🍽"], [["amenity", "cafe"], "☕"], [["amenity", "fast_food"], "🍔"],
+  [["amenity", "university"], "🎓"], [["amenity", "college"], "🎓"], [["amenity", "school"], "🏫"],
+  [["amenity", "kindergarten"], "🧸"], [["amenity", "hospital"], "🏥"], [["amenity", "clinic"], "🏥"],
+  [["amenity", "pharmacy"], "💊"], [["amenity", "bank"], "🏦"], [["amenity", "fuel"], "⛽"],
+  [["amenity", "place_of_worship"], "🕌"], [["shop", "mall"], "🏬"], [["shop"], "🛍"],
+  [["tourism", "hotel"], "🏨"], [["tourism"], "📸"], [["leisure", "park"], "🌳"], [["leisure"], "🏟"],
+  [["place"], "🏘"], [["highway"], "🛣"], [["building"], "🏢"]
+];
+const SKIP_AREAS = new Set(["Tashkent", "Toshkent", "Ташкент"]);
+
+function iconOf(p) {
+  for (const [[key, value], icon] of ICONS) {
+    if (p.osm_key === key && (!value || p.osm_value === value)) return icon;
+  }
+  return "📍";
+}
+
+function describe(p) {
+  const street = [p.street, p.housenumber].filter(Boolean).join(" ");
+  const name = (p.name || "").trim() || street;
+  const area = p.district || p.locality || p.city;
+  const sub = [];
+  if (street && street !== name) sub.push(street);
+  if (area && !SKIP_AREAS.has(area) && area !== name) sub.push(area);
+  return { name, sub: sub.join(", ") };
+}
+
+const SAME_PLACE_M = 400;
+
+function meters(a, b) {
+  const k = Math.PI / 180;
+  const x = (b.lon - a.lon) * k * Math.cos(((a.lat + b.lat) / 2) * k);
+  const y = (b.lat - a.lat) * k;
+  return Math.sqrt(x * x + y * y) * 6371000;
+}
+
+let searchController = null;
+let searchToken = 0;
+async function photon(q) {
+  if (searchController) searchController.abort();
+  searchController = new AbortController();
+  const c = map.getCenter();
+  const query = new URLSearchParams({ q, limit: 10, lang: "default", lat: c.lat.toFixed(4), lon: c.lng.toFixed(4), bbox: BBOX });
+  const response = await fetch(`${PHOTON}/api/?${query}`, { signal: searchController.signal });
+  if (!response.ok) throw new Error(response.status);
+  const data = await response.json();
+  const seen = new Set();
+  const items = [];
+  for (const f of data.features || []) {
+    const p = f.properties || {};
+    const { name, sub } = describe(p);
+    const [lon, lat] = f.geometry.coordinates;
+    const key = `${name}|${sub}`;
+    const twin = items.some((i) => i.name.toLowerCase() === name.toLowerCase() && meters(i, { lat, lon }) < SAME_PLACE_M);
+    if (!name || seen.has(key) || twin) continue;
+    seen.add(key);
+    items.push({ icon: iconOf(p), name, sub, lon, lat });
+    if (items.length >= 6) break;
+  }
+  return items;
+}
+
+function row(item) {
+  const el = document.createElement("div");
+  el.className = "row";
+  el.innerHTML = '<div class="icon"></div><div class="text"><div class="name"></div><div class="sub"></div></div>';
+  el.querySelector(".icon").textContent = item.icon;
+  el.querySelector(".name").textContent = item.name;
+  el.querySelector(".sub").textContent = item.sub || "";
+  el.addEventListener("click", () => {
+    $("query").value = item.name;
+    $("query").blur();
+    hideResults();
+    map.jumpTo({ center: [item.lon, item.lat], zoom: STREET_ZOOM });
+  });
+  return el;
+}
+
+function showList(items, head) {
   const box = $("results");
   box.innerHTML = "";
-  box.style.display = "block";
-  let items = [];
-  try {
-    items = await nominatim("search", { q, countrycodes: "uz", viewbox: VIEWBOX, bounded: 1, limit: 5, addressdetails: 1 });
-  } catch (e) {
-    items = [];
+  if (head) {
+    const h = document.createElement("div");
+    h.className = "head";
+    h.textContent = head;
+    box.appendChild(h);
   }
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
     empty.textContent = T.none;
     box.appendChild(empty);
-    return;
   }
-  const seen = new Set();
-  for (const item of items) {
-    const label = searchLabel(item);
-    if (seen.has(label)) continue;
-    seen.add(label);
-    const row = document.createElement("div");
-    row.textContent = label;
-    row.addEventListener("click", () => {
-      box.style.display = "none";
-      map.jumpTo({ center: [parseFloat(item.lon), parseFloat(item.lat)], zoom: STREET_ZOOM });
-    });
-    box.appendChild(row);
+  for (const item of items) box.appendChild(row(item));
+  box.style.display = "block";
+}
+
+function hideResults() {
+  $("results").style.display = "none";
+}
+
+function showRecent() {
+  if (!RECENT.length) return hideResults();
+  showList(RECENT.map(([name, lat, lon]) => ({ icon: "🕘", name, sub: "", lat, lon })), T.recent);
+}
+
+async function suggest(q) {
+  const token = ++searchToken;
+  try {
+    const items = await photon(q);
+    if (token === searchToken && $("query").value.trim() === q) showList(items);
+  } catch (e) {
+    if (e.name !== "AbortError" && token === searchToken) showList([]);
   }
+}
+
+let typingTimer = null;
+$("query").addEventListener("input", () => {
+  clearTimeout(typingTimer);
+  const q = $("query").value.trim();
+  if (q.length < 2) {
+    searchToken++;
+    if (searchController) searchController.abort();
+    return q ? hideResults() : showRecent();
+  }
+  typingTimer = setTimeout(() => suggest(q), 300);
+});
+
+$("query").addEventListener("focus", () => {
+  const q = $("query").value.trim();
+  if (q.length >= 2) suggest(q);
+  else showRecent();
+});
+
+$("form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  clearTimeout(typingTimer);
+  const q = $("query").value.trim();
+  if (q.length < 2) return;
+  $("query").blur();
+  suggest(q);
 });
 
 function browserLocation(done) {
