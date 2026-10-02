@@ -55,7 +55,10 @@
   .zoom button { width: 52px; height: 52px; padding: 0; border: 0; background: transparent; color: var(--text);
     font-size: 30px; font-weight: 300; line-height: 1; cursor: pointer; }
   .zoom button + button { border-top: 1px solid var(--card); }
-  .zoom button:active, .mine:active { opacity: .6; }
+  .zoom button:active, .mine:active, .view:active { opacity: .6; }
+  .view { width: 52px; height: 52px; padding: 0; border: 0; border-radius: 50%; background: var(--bg);
+    color: var(--text); font-size: 16px; font-weight: 700; box-shadow: 0 2px 10px rgba(0,0,0,.25); cursor: pointer; }
+  .view.on { color: var(--accent); }
   .mine { width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; padding: 0;
     border: 0; border-radius: 50%; background: var(--bg); color: var(--accent);
     box-shadow: 0 2px 10px rgba(0,0,0,.25); cursor: pointer; }
@@ -92,6 +95,7 @@
 
 <div class="attrib" id="attrib"><a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a></div>
 <div class="controls" id="controls">
+  <button class="view" id="view" type="button">3D</button>
   <div class="zoom">
     <button type="button" id="zoom-in">+</button>
     <button type="button" id="zoom-out">−</button>
@@ -118,7 +122,7 @@ const TEXT = {
     geo_denied: "Joylashuvni aniqlab bo'lmadi", outside: "Sahifani Telegram ichida oching",
     my_location: "Mening joylashuvim", zoom_in_btn: "Yaqinlashtirish", zoom_out_btn: "Uzoqlashtirish",
     finding_me: "Joylashuvingiz aniqlanmoqda…", pick_hint: "Xaritada nuqtani tanlang yoki manzilni qidiring",
-    zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring", recent: "Oldingi manzillar"
+    zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring", recent: "Oldingi manzillar", view_3d: "3D ko'rinish", view_2d: "Tepadan ko'rinish"
   },
   ru: {
     from: "Откуда?", to: "Куда?", placeholder: "Адрес: Амира Темура 108",
@@ -127,7 +131,7 @@ const TEXT = {
     geo_denied: "Не удалось определить геопозицию", outside: "Откройте страницу внутри Telegram",
     my_location: "Моё местоположение", zoom_in_btn: "Приблизить", zoom_out_btn: "Отдалить",
     finding_me: "Определяем ваше местоположение…", pick_hint: "Выберите точку на карте или найдите адрес",
-    zoom_in: "Приблизьте карту, чтобы выбрать точное место", recent: "Недавние адреса"
+    zoom_in: "Приблизьте карту, чтобы выбрать точное место", recent: "Недавние адреса", view_3d: "3D-вид", view_2d: "Вид сверху"
   }
 };
 
@@ -173,7 +177,7 @@ const map = new maplibregl.Map({
   center: hasStart ? [startLon, startLat] : TASHKENT,
   zoom: hasStart ? STREET_ZOOM : CITY_ZOOM,
   maxZoom: 19,
-  pitchWithRotate: false,
+  pitchWithRotate: true,
   dragRotate: false,
   touchPitch: false,
   attributionControl: false
@@ -212,6 +216,25 @@ if (mode === "to" && aLat !== null && aLon !== null) {
 
 $("zoom-in").addEventListener("click", () => map.zoomIn({ duration: 250 }));
 $("zoom-out").addEventListener("click", () => map.zoomOut({ duration: 250 }));
+
+const VIEW_KEY = "taxi_map_3d";
+let threeD = false;
+
+function setView(on, animate) {
+  threeD = on;
+  const handlers = [map.dragRotate, map.touchPitch];
+  for (const h of handlers) on ? h.enable() : h.disable();
+  on ? map.touchZoomRotate.enableRotation() : map.touchZoomRotate.disableRotation();
+  const camera = on ? { pitch: 60 } : { pitch: 0, bearing: 0 };
+  animate ? map.easeTo({ ...camera, duration: 500 }) : map.jumpTo(camera);
+  $("view").textContent = on ? "2D" : "3D";
+  $("view").classList.toggle("on", on);
+  $("view").setAttribute("aria-label", on ? T.view_2d : T.view_3d);
+  try { localStorage.setItem(VIEW_KEY, on ? "1" : "0"); } catch (e) {}
+}
+
+$("view").addEventListener("click", () => setView(!threeD, true));
+try { setView(localStorage.getItem(VIEW_KEY) === "1", false); } catch (e) { setView(false, false); }
 
 function formatAddress(a) {
   const area = a.suburb || a.city_district || a.neighbourhood || a.quarter || a.residential;
