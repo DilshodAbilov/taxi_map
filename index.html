@@ -4,9 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>TezGo — xarita</title>
+<link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
+<link rel="preconnect" href="https://photon.komoot.io" crossorigin>
+<link rel="preconnect" href="https://nominatim.openstreetmap.org" crossorigin>
+<link rel="preload" href="https://tiles.openfreemap.org/styles/liberty" as="fetch" crossorigin>
+<link rel="preload" href="https://tiles.openfreemap.org/planet" as="fetch" crossorigin>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script defer src="https://telegram.org/js/telegram-web-app.js"></script>
+<script defer src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
   :root {
     --bg: var(--tg-theme-bg-color, #ffffff);
@@ -39,6 +44,10 @@
   .results .sub { color: var(--hint); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .results .head { padding: 8px 14px 4px; color: var(--hint); font-size: 12px; text-transform: uppercase; }
   .results .empty { padding: 12px 14px; color: var(--hint); }
+  .results .loading::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px;
+    vertical-align: -1px; border: 2px solid var(--hint); border-right-color: transparent; border-radius: 50%;
+    animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .pin { position: absolute; left: 50%; top: 50%; z-index: 5; pointer-events: none;
     transform: translate(-50%, -100%); font-size: 40px; line-height: 1; transition: transform .15s; }
   .pin.lifted { transform: translate(-50%, -125%); }
@@ -113,7 +122,7 @@
   </div>
 </div>
 
-<script>
+<script type="module">
 const TEXT = {
   uz: {
     from: "Qayerdan?", to: "Qayerga?", placeholder: "Manzil: Amir Temur 108",
@@ -122,7 +131,7 @@ const TEXT = {
     geo_denied: "Joylashuvni aniqlab bo'lmadi", outside: "Sahifani Telegram ichida oching",
     my_location: "Mening joylashuvim", zoom_in_btn: "Yaqinlashtirish", zoom_out_btn: "Uzoqlashtirish",
     finding_me: "Joylashuvingiz aniqlanmoqda…", pick_hint: "Xaritada nuqtani tanlang yoki manzilni qidiring",
-    zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring", recent: "Oldingi manzillar", view_3d: "3D ko'rinish", view_2d: "Tepadan ko'rinish"
+    zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring", recent: "Oldingi manzillar", searching: "Qidirilmoqda…", view_3d: "3D ko'rinish", view_2d: "Tepadan ko'rinish"
   },
   ru: {
     from: "Откуда?", to: "Куда?", placeholder: "Адрес: Амира Темура 108",
@@ -131,7 +140,7 @@ const TEXT = {
     geo_denied: "Не удалось определить геопозицию", outside: "Откройте страницу внутри Telegram",
     my_location: "Моё местоположение", zoom_in_btn: "Приблизить", zoom_out_btn: "Отдалить",
     finding_me: "Определяем ваше местоположение…", pick_hint: "Выберите точку на карте или найдите адрес",
-    zoom_in: "Приблизьте карту, чтобы выбрать точное место", recent: "Недавние адреса", view_3d: "3D-вид", view_2d: "Вид сверху"
+    zoom_in: "Приблизьте карту, чтобы выбрать точное место", recent: "Недавние адреса", searching: "Ищем…", view_3d: "3D-вид", view_2d: "Вид сверху"
   }
 };
 
@@ -170,13 +179,30 @@ function number(name) {
 
 const startLat = number("lat"), startLon = number("lon");
 const hasStart = startLat !== null && startLon !== null;
+const LAST_KEY = "taxi_map_last";
+const LAST_MAX_AGE = 7 * 24 * 3600 * 1000;
 
+function lastPlace() {
+  try {
+    const [lon, lat, ts] = JSON.parse(localStorage.getItem(LAST_KEY) || "null") || [];
+    return Number.isFinite(lon) && Number.isFinite(lat) && Date.now() - ts < LAST_MAX_AGE ? [lon, lat] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function rememberPlace(point) {
+  try { localStorage.setItem(LAST_KEY, JSON.stringify([point[0], point[1], Date.now()])); } catch (e) {}
+}
+
+const last = hasStart ? null : lastPlace();
 const map = new maplibregl.Map({
   container: "map",
   style: STYLE,
-  center: hasStart ? [startLon, startLat] : TASHKENT,
-  zoom: hasStart ? STREET_ZOOM : CITY_ZOOM,
+  center: hasStart ? [startLon, startLat] : last || TASHKENT,
+  zoom: hasStart || last ? STREET_ZOOM : CITY_ZOOM,
   maxZoom: 19,
+  fadeDuration: 0,
   pitchWithRotate: true,
   dragRotate: false,
   touchPitch: false,
@@ -205,7 +231,14 @@ map.on("style.load", () => {
     const field = layer.layout && layer.layout["text-field"];
     if (field && JSON.stringify(field).includes("name")) map.setLayoutProperty(layer.id, "text-field", LABEL);
   }
+  applyBuildings();
 });
+
+function applyBuildings() {
+  if (!map.getLayer("building") || !map.getLayer("building-3d")) return;
+  map.setLayerZoomRange("building", 13, threeD ? 14 : 24);
+  map.setLayoutProperty("building-3d", "visibility", threeD ? "visible" : "none");
+}
 
 const aLat = number("alat"), aLon = number("alon");
 if (mode === "to" && aLat !== null && aLon !== null) {
@@ -222,6 +255,7 @@ let threeD = false;
 
 function setView(on, animate) {
   threeD = on;
+  applyBuildings();
   const handlers = [map.dragRotate, map.touchPitch];
   for (const h of handlers) on ? h.enable() : h.disable();
   on ? map.touchZoomRotate.enableRotation() : map.touchZoomRotate.disableRotation();
@@ -288,7 +322,8 @@ map.on("moveend", () => {
 });
 
 function leaveMe() {
-  if (atMe && !locating) {
+  follow = false;
+  if (atMe) {
     atMe = false;
     $("mine").classList.remove("active");
   }
@@ -385,7 +420,14 @@ function row(item) {
   return el;
 }
 
-function showList(items, head) {
+function note(text, extra) {
+  const el = document.createElement("div");
+  el.className = "empty" + (extra ? " " + extra : "");
+  el.textContent = text;
+  return el;
+}
+
+function showList(items, head, loading) {
   const box = $("results");
   box.innerHTML = "";
   if (head) {
@@ -394,13 +436,9 @@ function showList(items, head) {
     h.textContent = head;
     box.appendChild(h);
   }
-  if (!items.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = T.none;
-    box.appendChild(empty);
-  }
   for (const item of items) box.appendChild(row(item));
+  if (loading) box.appendChild(note(T.searching, "loading"));
+  else if (!items.length) box.appendChild(note(T.none));
   box.style.display = "block";
 }
 
@@ -413,13 +451,45 @@ function showRecent() {
   showList(RECENT.map(([name, lat, lon]) => ({ icon: "🕘", name, sub: "", lat, lon })), T.recent);
 }
 
+const cache = new Map();
+const CACHE_SIZE = 60;
+
+function words(text) {
+  return text.toLowerCase().split(/[\s,.'ʻʼ‘’-]+/).filter(Boolean);
+}
+
+function instant(q) {
+  const need = words(q);
+  const pool = [...RECENT.map(([name, lat, lon]) => ({ icon: "🕘", name, sub: "", lat, lon }))];
+  for (const items of cache.values()) pool.push(...items);
+  const seen = new Set();
+  const out = [];
+  for (const item of pool) {
+    const have = words(`${item.name} ${item.sub}`);
+    const key = `${item.name}|${item.sub}`;
+    if (seen.has(key) || !need.every((w) => have.some((h) => h.startsWith(w)))) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
 async function suggest(q) {
+  const key = q.toLowerCase();
+  if (cache.has(key)) {
+    searchToken++;
+    return showList(cache.get(key));
+  }
   const token = ++searchToken;
+  showList(instant(q), null, true);
   try {
     const items = await photon(q);
-    if (token === searchToken && $("query").value.trim() === q) showList(items);
+    cache.set(key, items);
+    if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value);
+    if (token === searchToken && $("query").value.trim().toLowerCase() === key) showList(items);
   } catch (e) {
-    if (e.name !== "AbortError" && token === searchToken) showList([]);
+    if (e.name !== "AbortError" && token === searchToken) showList(instant(q));
   }
 }
 
@@ -432,7 +502,10 @@ $("query").addEventListener("input", () => {
     if (searchController) searchController.abort();
     return q ? hideResults() : showRecent();
   }
-  typingTimer = setTimeout(() => suggest(q), 300);
+  const key = q.toLowerCase();
+  if (cache.has(key)) return suggest(q);
+  showList(instant(q), null, true);
+  typingTimer = setTimeout(() => suggest(q), 200);
 });
 
 $("query").addEventListener("focus", () => {
@@ -450,13 +523,20 @@ $("form").addEventListener("submit", (event) => {
   suggest(q);
 });
 
-function browserLocation(done) {
-  if (!navigator.geolocation) return done(null);
+function position(options, done) {
   navigator.geolocation.getCurrentPosition(
     (p) => done([p.coords.longitude, p.coords.latitude]),
     () => done(null),
-    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    options
   );
+}
+
+function browserLocation(done) {
+  if (!navigator.geolocation) return done(null, true);
+  position({ enableHighAccuracy: false, timeout: 4000, maximumAge: 300000 }, (quick) => {
+    if (quick) done(quick, false);
+    position({ enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }, (precise) => done(precise, true));
+  });
 }
 
 function currentLocation(done) {
@@ -464,12 +544,13 @@ function currentLocation(done) {
   if (!manager || typeof manager.init !== "function") return browserLocation(done);
   manager.init(() => {
     if (!manager.isLocationAvailable) return browserLocation(done);
-    manager.getLocation((data) => data ? done([data.longitude, data.latitude]) : browserLocation(done));
+    manager.getLocation((data) => data ? done([data.longitude, data.latitude], true) : browserLocation(done));
   });
 }
 
 let meMarker = null;
 let atMe = false;
+let follow = false;
 
 function showMe(point) {
   if (meMarker) {
@@ -483,18 +564,25 @@ function showMe(point) {
 
 function locateMe(silent) {
   locating = true;
+  follow = true;
+  let found = false;
   $("mine").classList.add("busy");
   if (map.getZoom() < MIN_POINT_ZOOM) $("address").textContent = T.finding_me;
-  currentLocation((point) => {
+  currentLocation((point, final) => {
+    if (point) {
+      found = true;
+      showMe(point);
+      rememberPlace(point);
+      if (follow) {
+        map.jumpTo({ center: point, zoom: Math.max(map.getZoom(), STREET_ZOOM) });
+        atMe = true;
+        $("mine").classList.add("active");
+      }
+    }
+    if (!final) return;
     locating = false;
     $("mine").classList.remove("busy");
-    if (point) {
-      showMe(point);
-      map.jumpTo({ center: point, zoom: STREET_ZOOM });
-      atMe = true;
-      $("mine").classList.add("active");
-      return;
-    }
+    if (found) return;
     if (map.getZoom() < MIN_POINT_ZOOM) $("address").textContent = T.pick_hint;
     if (!silent) tg ? tg.showAlert(T.geo_denied) : alert(T.geo_denied);
   });
