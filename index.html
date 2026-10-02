@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>TezGo — xarita</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
   :root {
     --bg: var(--tg-theme-bg-color, #ffffff);
@@ -17,10 +17,10 @@
     --card: var(--tg-theme-secondary-bg-color, #f2f2f7);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
     font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   #map { position: absolute; inset: 0; }
-  .top { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 1000; }
+  .top { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 10; }
   .search { display: flex; gap: 8px; }
   .search input { flex: 1; min-width: 0; padding: 12px 14px; border: 0; border-radius: 12px;
     background: var(--bg); color: var(--text); font-size: 16px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
@@ -31,17 +31,24 @@
   .results div { padding: 12px 14px; border-bottom: 1px solid var(--card); cursor: pointer; }
   .results div:last-child { border-bottom: 0; }
   .results .empty { color: var(--hint); cursor: default; }
-  .pin { position: absolute; left: 50%; top: 50%; z-index: 999; pointer-events: none;
+  .pin { position: absolute; left: 50%; top: 50%; z-index: 5; pointer-events: none;
     transform: translate(-50%, -100%); font-size: 40px; line-height: 1; transition: transform .15s; }
   .pin.lifted { transform: translate(-50%, -125%); }
-  .shadow { position: absolute; left: 50%; top: 50%; z-index: 998; width: 10px; height: 4px;
+  .shadow { position: absolute; left: 50%; top: 50%; z-index: 4; width: 10px; height: 4px;
     margin: -2px 0 0 -5px; border-radius: 50%; background: rgba(0,0,0,.35); pointer-events: none; }
-  .bottom { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 1000; }
+  .bottom { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 10; }
   .card { background: var(--bg); border-radius: 14px; padding: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.18); }
   .title { color: var(--hint); font-size: 13px; margin-bottom: 4px; }
   .address { font-weight: 600; min-height: 20px; }
-  .mine { position: absolute; right: 12px; bottom: 110px; z-index: 1000; width: 52px; height: 52px;
-    display: flex; align-items: center; justify-content: center; padding: 0;
+  .controls { position: absolute; right: 12px; bottom: 110px; z-index: 10; transition: bottom .15s;
+    display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .zoom { display: flex; flex-direction: column; border-radius: 26px; overflow: hidden;
+    background: var(--bg); box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+  .zoom button { width: 52px; height: 52px; padding: 0; border: 0; background: transparent; color: var(--text);
+    font-size: 30px; font-weight: 300; line-height: 1; cursor: pointer; }
+  .zoom button + button { border-top: 1px solid var(--card); }
+  .zoom button:active, .mine:active { opacity: .6; }
+  .mine { width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; padding: 0;
     border: 0; border-radius: 50%; background: var(--bg); color: var(--accent);
     box-shadow: 0 2px 10px rgba(0,0,0,.25); cursor: pointer; }
   .mine svg { width: 26px; height: 26px; }
@@ -51,9 +58,15 @@
   @keyframes pulse { 50% { opacity: .3; } }
   .me { width: 18px; height: 18px; border-radius: 50%; background: #1a73e8; border: 3px solid #fff;
     box-shadow: 0 0 0 6px rgba(26,115,232,.25), 0 1px 4px rgba(0,0,0,.3); }
+  .start { width: 18px; height: 18px; border-radius: 50%; background: #2e7d32; border: 3px solid #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.35); }
   .confirm { display: none; width: 100%; margin-top: 10px; padding: 14px; border: 0; border-radius: 12px;
     background: var(--accent); color: var(--accent-text); font-size: 16px; font-weight: 600; }
-  .leaflet-control-attribution { font-size: 10px; }
+  .maplibregl-ctrl-attrib { font-size: 10px; }
+  .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { display: none; }
+  .attrib { position: absolute; left: 12px; z-index: 6; font-size: 10px; color: var(--hint);
+    background: rgba(255,255,255,.7); padding: 1px 6px; border-radius: 6px; }
+  .attrib a { color: inherit; }
 </style>
 </head>
 <body>
@@ -69,11 +82,18 @@
   <div class="results" id="results"></div>
 </div>
 
-<button class="mine" id="mine" type="button">
-  <svg viewBox="0 0 24 24" aria-hidden="true"><path class="arrow" d="M20.5 3.5 3.5 10.6l7 2.9 2.9 7 7.1-17z"/></svg>
-</button>
+<div class="attrib" id="attrib"><a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a></div>
+<div class="controls" id="controls">
+  <div class="zoom">
+    <button type="button" id="zoom-in">+</button>
+    <button type="button" id="zoom-out">−</button>
+  </div>
+  <button class="mine" id="mine" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path class="arrow" d="M20.5 3.5 3.5 10.6l7 2.9 2.9 7 7.1-17z"/></svg>
+  </button>
+</div>
 
-<div class="bottom">
+<div class="bottom" id="bottom">
   <div class="card">
     <div class="title" id="title"></div>
     <div class="address" id="address"></div>
@@ -88,7 +108,7 @@ const TEXT = {
     find: "Qidirish", none: "Hech narsa topilmadi", confirm: "Tasdiqlash",
     locating: "Manzil aniqlanmoqda…", unknown: "Xaritadagi nuqta",
     geo_denied: "Joylashuvni aniqlab bo'lmadi", outside: "Sahifani Telegram ichida oching",
-    my_location: "Mening joylashuvim",
+    my_location: "Mening joylashuvim", zoom_in_btn: "Yaqinlashtirish", zoom_out_btn: "Uzoqlashtirish",
     finding_me: "Joylashuvingiz aniqlanmoqda…", pick_hint: "Xaritada nuqtani tanlang yoki manzilni qidiring",
     zoom_in: "Aniq nuqta uchun xaritani yaqinlashtiring"
   },
@@ -97,19 +117,20 @@ const TEXT = {
     find: "Найти", none: "Ничего не найдено", confirm: "Подтвердить",
     locating: "Определяем адрес…", unknown: "Точка на карте",
     geo_denied: "Не удалось определить геопозицию", outside: "Откройте страницу внутри Telegram",
-    my_location: "Моё местоположение",
+    my_location: "Моё местоположение", zoom_in_btn: "Приблизить", zoom_out_btn: "Отдалить",
     finding_me: "Определяем ваше местоположение…", pick_hint: "Выберите точку на карте или найдите адрес",
     zoom_in: "Приблизьте карту, чтобы выбрать точное место"
   }
 };
 
+const STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const NOMINATIM = "https://nominatim.openstreetmap.org";
-const TASHKENT = [41.3111, 69.2797];
-const CITY_ZOOM = 12;
-const STREET_ZOOM = 17;
-const MIN_POINT_ZOOM = 15;
-let locating = false;
+const TASHKENT = [69.2797, 41.3111];
+const CITY_ZOOM = 11;
+const STREET_ZOOM = 16.5;
+const MIN_POINT_ZOOM = 14.5;
 const VIEWBOX = "69.05,41.45,69.50,41.15";
+let locating = false;
 
 const webApp = window.Telegram && window.Telegram.WebApp;
 const tg = webApp && webApp.platform && webApp.platform !== "unknown" ? webApp : null;
@@ -125,6 +146,8 @@ $("query").placeholder = T.placeholder;
 $("find").textContent = T.find;
 $("mine").setAttribute("aria-label", T.my_location);
 $("mine").title = T.my_location;
+$("zoom-in").setAttribute("aria-label", T.zoom_in_btn);
+$("zoom-out").setAttribute("aria-label", T.zoom_out_btn);
 $("confirm").textContent = T.confirm;
 
 function number(name) {
@@ -135,17 +158,51 @@ function number(name) {
 const startLat = number("lat"), startLon = number("lon");
 const hasStart = startLat !== null && startLon !== null;
 
-const map = L.map("map", { zoomControl: false, attributionControl: true })
-  .setView(hasStart ? [startLat, startLon] : TASHKENT, hasStart ? 16 : CITY_ZOOM);
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+const map = new maplibregl.Map({
+  container: "map",
+  style: STYLE,
+  center: hasStart ? [startLon, startLat] : TASHKENT,
+  zoom: hasStart ? STREET_ZOOM : CITY_ZOOM,
   maxZoom: 19,
-  attribution: "© OpenStreetMap"
-}).addTo(map);
+  pitchWithRotate: false,
+  dragRotate: false,
+  touchPitch: false,
+  attributionControl: false
+});
+map.touchZoomRotate.disableRotation();
+
+const LABEL = lang === "ru"
+  ? ["coalesce", ["get", "name:ru"], ["get", "name:nonlatin"], ["get", "name:latin"], ["get", "name"]]
+  : ["coalesce", ["get", "name:uz"], ["get", "name:latin"], ["get", "name"]];
+
+map.on("styleimagemissing", (e) => {
+  if (!map.hasImage(e.id)) map.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) });
+});
+
+function placeControls() {
+  const h = $("bottom").offsetHeight;
+  $("controls").style.bottom = `${h + 24}px`;
+  $("attrib").style.bottom = `${h + 16}px`;
+}
+if (window.ResizeObserver) new ResizeObserver(placeControls).observe($("bottom"));
+placeControls();
+
+map.on("style.load", () => {
+  for (const layer of map.getStyle().layers) {
+    const field = layer.layout && layer.layout["text-field"];
+    if (field && JSON.stringify(field).includes("name")) map.setLayoutProperty(layer.id, "text-field", LABEL);
+  }
+});
 
 const aLat = number("alat"), aLon = number("alon");
 if (mode === "to" && aLat !== null && aLon !== null) {
-  L.circleMarker([aLat, aLon], { radius: 8, color: "#ffffff", weight: 3, fillColor: "#2e7d32", fillOpacity: 1 }).addTo(map);
+  const el = document.createElement("div");
+  el.className = "start";
+  new maplibregl.Marker({ element: el }).setLngLat([aLon, aLat]).addTo(map);
 }
+
+$("zoom-in").addEventListener("click", () => map.zoomIn({ duration: 250 }));
+$("zoom-out").addEventListener("click", () => map.zoomOut({ duration: 250 }));
 
 function formatAddress(a) {
   const area = a.suburb || a.city_district || a.neighbourhood || a.quarter || a.residential;
@@ -155,6 +212,13 @@ function formatAddress(a) {
   let parts = [area, street || place].filter(Boolean);
   if (!parts.length) parts = [a.city || a.town || a.village].filter(Boolean);
   return [...new Set(parts)].join(", ");
+}
+
+function searchLabel(item) {
+  const name = (item.name || "").trim();
+  const address = formatAddress(item.address || {});
+  if (name && !address.includes(name)) return address ? `${name}, ${address}` : name;
+  return address || item.display_name;
 }
 
 let lastRequest = 0;
@@ -186,12 +250,8 @@ async function updateAddress() {
 }
 
 let moveTimer = null;
-map.on("dragstart zoomstart", () => {
-  if (atMe && !locating) {
-    atMe = false;
-    $("mine").classList.remove("active");
-  }
-});
+map.on("dragstart", leaveMe);
+map.on("zoomstart", (e) => { if (e.originalEvent) leaveMe(); });
 map.on("movestart", () => {
   $("pin").classList.add("lifted");
   $("results").style.display = "none";
@@ -201,6 +261,13 @@ map.on("moveend", () => {
   clearTimeout(moveTimer);
   moveTimer = setTimeout(updateAddress, 500);
 });
+
+function leaveMe() {
+  if (atMe && !locating) {
+    atMe = false;
+    $("mine").classList.remove("active");
+  }
+}
 
 $("form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -223,12 +290,16 @@ $("form").addEventListener("submit", async (event) => {
     box.appendChild(empty);
     return;
   }
+  const seen = new Set();
   for (const item of items) {
+    const label = searchLabel(item);
+    if (seen.has(label)) continue;
+    seen.add(label);
     const row = document.createElement("div");
-    row.textContent = formatAddress(item.address || {}) || item.display_name;
+    row.textContent = label;
     row.addEventListener("click", () => {
       box.style.display = "none";
-      map.setView([parseFloat(item.lat), parseFloat(item.lon)], 17);
+      map.jumpTo({ center: [parseFloat(item.lon), parseFloat(item.lat)], zoom: STREET_ZOOM });
     });
     box.appendChild(row);
   }
@@ -237,7 +308,7 @@ $("form").addEventListener("submit", async (event) => {
 function browserLocation(done) {
   if (!navigator.geolocation) return done(null);
   navigator.geolocation.getCurrentPosition(
-    (p) => done([p.coords.latitude, p.coords.longitude]),
+    (p) => done([p.coords.longitude, p.coords.latitude]),
     () => done(null),
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
   );
@@ -248,7 +319,7 @@ function currentLocation(done) {
   if (!manager || typeof manager.init !== "function") return browserLocation(done);
   manager.init(() => {
     if (!manager.isLocationAvailable) return browserLocation(done);
-    manager.getLocation((data) => data ? done([data.latitude, data.longitude]) : browserLocation(done));
+    manager.getLocation((data) => data ? done([data.longitude, data.latitude]) : browserLocation(done));
   });
 }
 
@@ -256,9 +327,13 @@ let meMarker = null;
 let atMe = false;
 
 function showMe(point) {
-  const icon = L.divIcon({ className: "", html: '<div class="me"></div>', iconSize: [24, 24], iconAnchor: [12, 12] });
-  if (meMarker) meMarker.setLatLng(point);
-  else meMarker = L.marker(point, { icon, interactive: false, keyboard: false }).addTo(map);
+  if (meMarker) {
+    meMarker.setLngLat(point);
+    return;
+  }
+  const el = document.createElement("div");
+  el.className = "me";
+  meMarker = new maplibregl.Marker({ element: el }).setLngLat(point).addTo(map);
 }
 
 function locateMe(silent) {
@@ -270,7 +345,7 @@ function locateMe(silent) {
     $("mine").classList.remove("busy");
     if (point) {
       showMe(point);
-      map.setView(point, STREET_ZOOM);
+      map.jumpTo({ center: point, zoom: STREET_ZOOM });
       atMe = true;
       $("mine").classList.add("active");
       return;
@@ -299,6 +374,7 @@ function confirmPoint() {
 if (tg) {
   tg.ready();
   tg.expand();
+  if (typeof tg.disableVerticalSwipes === "function") tg.disableVerticalSwipes();
   tg.MainButton.setText(T.confirm);
   tg.MainButton.onClick(confirmPoint);
   tg.MainButton.show();
